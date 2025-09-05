@@ -54,11 +54,13 @@ class Product(BaseModel):
     nama_produk: str
     harga: int
     kategori_id: int
+    gambar: Optional[str] = None
 
 class ProductCreate(BaseModel):
     nama_produk: str
     harga: int
     kategori_id: int
+    gambar: Optional[str] = None
 
 class ProductOut(Product):
     id: int

@@ -1,31 +1,70 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form
 from typing import List
+import base64
 from .dependencies import get_current_user
 from ..models import ProductCreate, ProductOut, UserOut
-from ..crud import fetch, insert_product, update, delete, is_product_owner
+from ..crud import fetch, insert_product, update, delete, is_product_owner, fetch_products
 
 router = APIRouter(prefix="/products", tags=["Products"])
 
 @router.get("/", response_model=List[ProductOut])
 def get_products():
     """Mendapatkan daftar semua produk."""
-    return fetch("products")
+    products_data = fetch_products()
+    return [ProductOut(**p) for p in products_data]
+
+@router.get("/my-products", response_model=List[ProductOut])
+async def get_my_products(current_user: UserOut = Depends(get_current_user)):
+    """
+    Mendapatkan semua produk yang dibuat oleh user yang sedang login.
+    """
+    # Ambil semua relasi product_users milik user ini
+    product_users = fetch("product_users", filters={"user_id": current_user.id})
+    product_ids = [pu["product_id"] for pu in product_users]
+    if not product_ids:
+        return []
+    # Ambil semua produk dengan id yang sesuai
+    products = []
+    for pid in product_ids:
+        res = fetch("products", filters={"id": pid})
+        if res:
+            products.append(ProductOut(**res[0]))
+    return products
 
 @router.post("/", response_model=ProductOut)
-def create_product(
-    product: ProductCreate,
+async def create_product(
+    nama_produk: str = Form(...),
+    harga: int = Form(...),
+    kategori_id: int = Form(...),
+    gambar: UploadFile = File(None),
     current_user: UserOut = Depends(get_current_user)
 ):
-    """Membuat produk baru. Hanya staff yang dapat membuat produk."""
+    """Membuat produk baru dengan gambar."""
     if current_user.role != "staff":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Hanya staff yang bisa membuat produk."
         )
-    result = insert_product(product, current_user.id)
-    if result is None:
-        raise HTTPException(status_code=500, detail="Database error")
-    return result
+
+    gambar_base64 = None
+    if gambar:
+        gambar_bytes = await gambar.read()
+        # Encode bytes to a Base64 string
+        gambar_base64 = base64.b64encode(gambar_bytes).decode('utf-8')
+
+    product = ProductCreate(
+        nama_produk=nama_produk,
+        harga=harga,
+        kategori_id=kategori_id,
+        # Pass the Base64 string to the Pydantic model
+        gambar=gambar_base64
+    )
+    
+    try:
+        result = insert_product(product, current_user.id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
 @router.put("/{product_id}", response_model=ProductOut)
 async def update_product(

@@ -2,6 +2,7 @@ from .config import supabase
 from .models import *
 from supabase import Client
 from typing import List, Dict, Any
+import base64
 
 # Generic helper
 
@@ -48,28 +49,62 @@ def delete(table: str, id: int) -> Dict[str, Any]:
 
 # CRUD operations for products
 
-def fetch_products(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+def fetch_products(filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     try:
         query = supabase.table("products").select("*")
         if filters:
             for k, v in filters.items():
                 query = query.eq(k, v)
+        
         result = query.execute()
-        return result.data or []
+        
+        # Check if data exists
+        if not result.data:
+            return []
+        
+        products_list = result.data
+        
+        # Iterate over the products and convert the 'gambar' field
+        for product in products_list:
+            if product.get("gambar"):
+                # Decode the hex-encoded string to bytes first, if necessary
+                # (Supabase might return it in this format depending on the client)
+                # Or if it's already bytes, directly encode it
+                if isinstance(product["gambar"], str) and product["gambar"].startswith("\\x"):
+                    # This handles the case where PostgreSQL returns hex-encoded string
+                    bytes_data = bytes.fromhex(product["gambar"][2:])
+                else:
+                    bytes_data = product["gambar"]
+
+                # Now encode the bytes to a Base64 string
+                product["gambar"] = base64.b64encode(bytes_data).decode("utf-8")
+        
+        return products_list
     except Exception as e:
-        print(f"Error saat fetch products: {e}")
+        print(f"Error fetching products: {e}")
         return []
     
 def insert_product(product: ProductCreate, user_id: int) -> ProductOut:
     try:
-        product_data = supabase.table("products").insert(product.dict()).execute().data[0]
+        # Pydantic's .model_dump() is a good practice for modern versions
+        product_dict = product.model_dump()
+        
+        # We're no longer decoding here. The client sends the Base64 string directly
+        # The Supabase 'BYTEA' column will store this Base64 representation.
+        data = supabase.table("products").insert(product_dict).execute()
+        
+        if not data.data:
+            raise Exception("Failed to insert product. Supabase returned no data.")
+            
+        product_data = data.data[0]
         product_id = product_data['id']
+        
         supabase.table("product_users").insert({'user_id': user_id, 'product_id': product_id}).execute()
         
         return ProductOut(**product_data)
     except Exception as e:
-        print("Insert product error:", e)
-        return None
+        print(f"Insert product error: {e}")
+        raise e
 
 # Fungsi untuk memeriksa kepemilikan produk
 def is_product_owner(user_id: int, product_id: int) -> bool:
