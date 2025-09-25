@@ -64,21 +64,7 @@ def fetch_products(filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, A
         
         products_list = result.data
         
-        # Iterate over the products and convert the 'gambar' field
-        for product in products_list:
-            if product.get("gambar"):
-                # Decode the hex-encoded string to bytes first, if necessary
-                # (Supabase might return it in this format depending on the client)
-                # Or if it's already bytes, directly encode it
-                if isinstance(product["gambar"], str) and product["gambar"].startswith("\\x"):
-                    # This handles the case where PostgreSQL returns hex-encoded string
-                    bytes_data = bytes.fromhex(product["gambar"][2:])
-                else:
-                    bytes_data = product["gambar"]
-
-                # Now encode the bytes to a Base64 string
-                product["gambar"] = base64.b64encode(bytes_data).decode("utf-8")
-        
+        # Tidak perlu konversi gambar, karena sudah varchar base64
         return products_list
     except Exception as e:
         print(f"Error fetching products: {e}")

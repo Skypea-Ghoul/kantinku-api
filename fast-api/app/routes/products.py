@@ -9,55 +9,73 @@ router = APIRouter(prefix="/products", tags=["Products"])
 
 @router.get("/", response_model=List[ProductOut])
 def get_products():
-    """Mendapatkan daftar semua produk."""
     products_data = fetch_products()
-    return [ProductOut(**p) for p in products_data]
+    products = []
+    for p in products_data:
+        products.append(ProductOut(**p))  # langsung tanpa konversi
+    return products
 
 @router.get("/my-products", response_model=List[ProductOut])
 async def get_my_products(current_user: UserOut = Depends(get_current_user)):
-    """
-    Mendapatkan semua produk yang dibuat oleh user yang sedang login.
-    """
-    # Ambil semua relasi product_users milik user ini
     product_users = fetch("product_users", filters={"user_id": current_user.id})
     product_ids = [pu["product_id"] for pu in product_users]
     if not product_ids:
         return []
-    # Ambil semua produk dengan id yang sesuai
     products = []
     for pid in product_ids:
         res = fetch("products", filters={"id": pid})
         if res:
-            products.append(ProductOut(**res[0]))
+            products.append(ProductOut(**res[0]))  # langsung tanpa konversi
     return products
 
+@router.get("/filter-by-user", response_model=List[ProductOut])
+def filter_products_by_user(user_id: int):
+    product_users = fetch("product_users", filters={"user_id": user_id})
+    product_ids = [pu["product_id"] for pu in product_users]
+    if not product_ids:
+        return []
+    products = []
+    for pid in product_ids:
+        res = fetch("products", filters={"id": pid})
+        if res:
+            products.append(ProductOut(**res[0]))  # langsung tanpa konversi
+    return products
+
+@router.get("/{product_id}", response_model=ProductOut)
+async def get_product_by_id(
+    product_id: int,
+    current_user: UserOut = Depends(get_current_user)
+):
+    if not is_product_owner(current_user.id, product_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Anda tidak memiliki hak untuk mengakses produk ini."
+        )
+    res = fetch("products", filters={"id": product_id})
+    if not res:
+        raise HTTPException(status_code=404, detail="Produk tidak ditemukan.")
+    return res[0]
 @router.post("/", response_model=ProductOut)
 async def create_product(
     nama_produk: str = Form(...),
     harga: int = Form(...),
     kategori_id: int = Form(...),
-    gambar: UploadFile = File(None),
+    gambar: str = Form(None),  # Gambar dikirim sebagai string base64
     current_user: UserOut = Depends(get_current_user)
 ):
-    """Membuat produk baru dengan gambar."""
+    """Membuat produk baru dengan gambar base64."""
     if current_user.role != "staff":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Hanya staff yang bisa membuat produk."
         )
 
-    gambar_base64 = None
-    if gambar:
-        gambar_bytes = await gambar.read()
-        # Encode bytes to a Base64 string
-        gambar_base64 = base64.b64encode(gambar_bytes).decode('utf-8')
-
+    # Tidak perlu encode, langsung simpan string base64
     product = ProductCreate(
         nama_produk=nama_produk,
         harga=harga,
         kategori_id=kategori_id,
-        # Pass the Base64 string to the Pydantic model
-        gambar=gambar_base64
+        gambar=gambar
     )
     
     try:
@@ -106,22 +124,3 @@ async def delete_product(
     if not res:
         raise HTTPException(status_code=404, detail='Produk tidak ditemukan.')
     return {"message": f"Produk dengan ID {product_id} berhasil dihapus."}
-
-@router.get("/{product_id}", response_model=ProductOut)
-async def get_product_by_id(
-    product_id: int,
-    current_user: UserOut = Depends(get_current_user)
-):
-    """
-    Mendapatkan produk berdasarkan product_id.
-    Hanya user yang terkait (product_user) yang bisa mengakses.
-    """
-    if not is_product_owner(current_user.id, product_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Anda tidak memiliki hak untuk mengakses produk ini."
-        )
-    res = fetch("products", filters={"id": product_id})
-    if not res:
-        raise HTTPException(status_code=404, detail="Produk tidak ditemukan.")
-    return res[0]   
