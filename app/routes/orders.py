@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List
-from ..models import Order, OrderItem, Order as OrderModel
+from ..models import Order, OrderItem, Order as OrderModel, UserOut
 from ..crud import fetch_orders
 from .dependencies import get_current_user
 from ..config import supabase
@@ -13,6 +13,73 @@ def get_orders(current_user=Depends(get_current_user)):
     """Ambil semua order milik user yang login."""
     orders = fetch_orders({"user_id": current_user.id})
     return orders
+
+@router.get("/staff/inbox", response_model=List[Order])
+def fetch_staff_order_inbox(include_items: bool = False, current_user: UserOut = Depends(get_current_user)):
+    """
+    Mengambil semua pesanan (Orders) yang produknya dimiliki oleh Staff yang login
+    dan memiliki status yang relevan.
+    """
+    if current_user.role != "staff":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak. Hanya untuk staff.")
+
+    # Panggil RPC yang sudah diperbarui untuk mengambil semua status relevan
+    inbox_orders_query = supabase.rpc(
+        "get_staff_inbox_orders", {"p_staff_id": current_user.id}
+    ).execute()
+   
+    if not inbox_orders_query.data:
+        return []
+
+    orders_list = inbox_orders_query.data
+
+    if include_items:
+        order_ids = [order['id'] for order in orders_list]
+        
+        # ✅ PERBAIKAN: Ambil ID produk dari tabel 'product_users'
+        staff_products_query = supabase.table("product_users").select("product_id").eq("user_id", current_user.id).execute()
+        # Perhatikan bahwa kita mengambil 'product_id' bukan 'id'
+        staff_product_ids = [product['product_id'] for product in staff_products_query.data] 
+
+        if not staff_product_ids:
+            for order in orders_list:
+                order['items'] = []
+            return [Order(**order) for order in orders_list]
+
+        # Ambil semua item dari order yang relevan, DAN filter hanya untuk produk milik staff
+        all_items_query = supabase.table("order_items").select("*").in_("order_id", order_ids).in_("product_id", staff_product_ids).execute()
+        
+        items_by_order_id = {}
+        for item in all_items_query.data:
+            order_id = item['order_id']
+            if order_id not in items_by_order_id:
+                items_by_order_id[order_id] = []
+            items_by_order_id[order_id].append(item)
+            
+        # Lampirkan item ke setiap order
+        for order in orders_list:
+            # 'items' akan berisi HANYA item milik staff yang login
+            order['items'] = items_by_order_id.get(order['id'], [])
+
+    return [Order(**order) for order in orders_list]
+
+# Endpoint baru untuk mengubah status
+@router.put("/{order_id}/status", response_model=Order)
+def update_order_status(order_id: int, status_update: dict, current_user: UserOut = Depends(get_current_user)):
+    if current_user.role != "staff":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hanya staff yang bisa mengubah status.")
+
+    new_status = status_update.get("status")
+    if not new_status:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status baru harus disediakan.")
+
+    # Lakukan update
+    updated_order = supabase.table("orders").update({"status": new_status}).eq("id", order_id).execute()
+
+    if not updated_order.data:
+        raise HTTPException(status_code=404, detail="Order tidak ditemukan atau gagal diupdate.")
+
+    return updated_order.data[0]
 
 @router.get("/{order_id}", response_model=Order)
 def get_order_by_id(order_id: int, current_user=Depends(get_current_user)):
@@ -119,9 +186,41 @@ def get_my_order_items(current_user=Depends(get_current_user)):
 
 @router.get("/{order_id}/items", response_model=List[OrderItem])
 def get_order_items(order_id: int, current_user=Depends(get_current_user)):
-    """Ambil semua item pada order milik user yang login."""
-    order = supabase.table("orders").select("*").eq("id", order_id).single().execute().data
-    if not order or order["user_id"] != current_user.id:
-        raise HTTPException(status_code=404, detail="Order tidak ditemukan atau bukan milik Anda")
+    """
+    Ambil semua item pada sebuah order.
+    - Customer hanya bisa melihat item dari order miliknya.
+    - Staff bisa melihat item dari order jika order tersebut mengandung produk miliknya.
+    """
+    # 1. Ambil data order terlebih dahulu
+    order_query = supabase.table("orders").select("*").eq("id", order_id).single().execute()
+    if not order_query.data:
+        raise HTTPException(status_code=404, detail="Order tidak ditemukan")
+
+    order = order_query.data
+
+    # 2. Lakukan validasi hak akses berdasarkan role
+    if current_user.role == "customer":
+        # Customer hanya boleh melihat order miliknya sendiri
+        if order["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Anda tidak memiliki akses ke pesanan ini.")
+    elif current_user.role == "staff":
+        # Staff harus punya setidaknya satu produk dalam order ini untuk bisa melihatnya.
+        # a. Ambil ID produk milik staff
+        staff_products_query = supabase.table("product_users").select("product_id").eq("user_id", current_user.id).execute()
+        staff_product_ids = [p['product_id'] for p in staff_products_query.data]
+
+        if not staff_product_ids:
+             raise HTTPException(status_code=403, detail="Anda tidak memiliki produk untuk melihat pesanan ini.")
+
+        # b. Cek apakah ada item di order ini yang product_id-nya cocok dengan produk staff
+        items_in_order_query = supabase.table("order_items").select("id").eq("order_id", order_id).in_("product_id", staff_product_ids).execute()
+        
+        if not items_in_order_query.data:
+            raise HTTPException(status_code=403, detail="Anda tidak memiliki akses ke item pesanan ini.")
+    else:
+        # Role lain tidak diizinkan
+        raise HTTPException(status_code=403, detail="Akses ditolak.")
+
+    # 3. Jika validasi lolos, ambil dan kembalikan item
     items = supabase.table("order_items").select("*").eq("order_id", order_id).execute().data
     return items

@@ -1,7 +1,7 @@
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Optional, List
 from datetime import datetime
-from pydantic import Field
+
 
 # Users
 # class User(BaseModel):
@@ -61,12 +61,17 @@ class Product(BaseModel):
     harga: int
     kategori_id: int
     gambar: Optional[str] = None
+    # FIX: Tambahkan field is_active
+    is_active: bool = True 
 
 class ProductCreate(BaseModel):
     nama_produk: str
     harga: int
     kategori_id: int
     gambar: Optional[str] = None
+    # FIX: Tambahkan field is_active
+    is_active: bool = True 
+
 
 class ProductOut(Product):
     id: int
@@ -91,14 +96,6 @@ class ProductUser(BaseModel):
     user_id: int
     product_id: int
 
-# Orders
-class Order(BaseModel):
-    id: Optional[int]
-    user_id: int
-    status: str
-    total_harga: float
-    tanggal_pesanan: Optional[str] = Field(None, description="Waktu pesanan dibuat dalam format string") 
-
 # OrderItems
 class OrderItem(BaseModel):
     id: Optional[int]
@@ -107,16 +104,32 @@ class OrderItem(BaseModel):
     jumlah: int
     harga_unit: float
     subtotal: float
+    class Config:
+        orm_mode = True
+
+# Orders
+class Order(BaseModel):
+    id: Optional[int]
+    user_id: int
+    status: str
+    total_harga: float
+    tanggal_pesanan: Optional[str] = Field(None, description="Waktu pesanan dibuat dalam format string")
+    order_items: List[OrderItem] = [] 
+    class Config:
+        orm_mode = True
 
 # Payments
 class Payment(BaseModel):
     id: Optional[int]
     order_id: int
-    transaksi_id_midtrans: Optional[str]
-    metode_pembayaran: str
-    jumlah_pembayaran: float
-    tanggal_pembayaran: Optional[datetime]
-    status_pembayaran: str
-    nomor_va: Optional[str]
+    transaksi_id: Optional[str]
+    status_code: Optional[str] # Dibuat opsional karena mungkin tidak ada di callback sederhana
+    transaction_status: str
+    gross_amount: float
+    payment_type: str
     qr_code_url: Optional[str]
-    waktu_penyelesaian: Optional[datetime]
+    transaction_time: Optional[datetime]
+    settlement_time: Optional[datetime] = Field(None, alias="settlement_time")
+    signature_key: Optional[str]
+
+

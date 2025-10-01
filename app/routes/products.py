@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form
-from typing import List
+from typing import List, Optional
 import base64
 from .dependencies import get_current_user
 from ..models import ProductCreate, ProductOut, UserOut
@@ -9,10 +9,10 @@ router = APIRouter(prefix="/products", tags=["Products"])
 
 @router.get("/", response_model=List[ProductOut])
 def get_products():
-    products_data = fetch_products()
+    products_data = fetch_products(filters={"is_active": True}) 
     products = []
     for p in products_data:
-        products.append(ProductOut(**p))  # langsung tanpa konversi
+        products.append(ProductOut(**p))
     return products
 
 @router.get("/my-products", response_model=List[ProductOut])
@@ -29,17 +29,42 @@ async def get_my_products(current_user: UserOut = Depends(get_current_user)):
     return products
 
 @router.get("/filter-by-user", response_model=List[ProductOut])
-def filter_products_by_user(user_id: int):
+def filter_products_by_user(
+    user_id: int, 
+    # FIX: Terima is_active sebagai query parameter opsional
+    is_active: Optional[bool] = None 
+):
+    """Mengambil produk berdasarkan user ID, dengan opsi filter status aktif."""
+    
+    # 1. Temukan product_ids milik staff
     product_users = fetch("product_users", filters={"user_id": user_id})
     product_ids = [pu["product_id"] for pu in product_users]
+    
     if not product_ids:
         return []
+        
     products = []
+    
+    # 2. Siapkan filter tambahan (hanya jika is_active dikirim)
+    product_filter = {}
+    if is_active is not None:
+        # Jika is_active=True, filter hanya yang aktif.
+        # Jika is_active=False, filter hanya yang non-aktif.
+        product_filter['is_active'] = is_active
+        
     for pid in product_ids:
-        res = fetch("products", filters={"id": pid})
+        # 3. Gabungkan filter ID dan filter status aktif
+        combined_filter = {"id": pid}
+        combined_filter.update(product_filter) # Tambahkan is_active jika ada
+        
+        # Ambil detail produk dengan filter gabungan
+        res = fetch("products", filters=combined_filter) 
+        
         if res:
-            products.append(ProductOut(**res[0]))  # langsung tanpa konversi
+            products.append(ProductOut(**res[0]))
+            
     return products
+
 
 @router.get("/{product_id}", response_model=ProductOut)
 async def get_product_by_id(
@@ -87,16 +112,29 @@ async def create_product(
 @router.put("/{product_id}", response_model=ProductOut)
 async def update_product(
     product_id: int,
-    product: ProductCreate,
+    # FIX: Ubah dari Pydantic model langsung ke Form Data jika Anda menggunakan Form()
+    # TAPI: Karena Anda menggunakan product: ProductCreate, kita harus memastikan
+    # is_active dapat dimasukkan ke dalam dict yang dikirim ke crud.update.
+    # Jika Flutter mengirim data sebagai JSON, signature ini sudah benar
+    # dan akan menerima 'is_active'.
+    product: ProductCreate, 
     current_user: UserOut = Depends(get_current_user)
 ):
-    """Memperbarui produk. Hanya user yang terkait (product_user) yang bisa melakukannya."""
+    """
+    Memperbarui produk, termasuk status is_active.
+    """
     if not is_product_owner(current_user.id, product_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Anda tidak memiliki hak untuk mengubah produk ini."
         )
-    res = update('products', product_id, product.dict(exclude_unset=True))
+    
+    # FIX: Dapatkan data dalam bentuk dictionary, termasuk is_active
+    update_data = product.dict(exclude_unset=True)
+    
+    # Perbarui hanya field yang ada (ini akan mencakup is_active jika dikirim)
+    res = update('products', product_id, update_data)
+    
     if not res:
         raise HTTPException(status_code=404, detail='Produk tidak ditemukan.')
     return res
@@ -106,21 +144,24 @@ async def delete_product(
     product_id: int,
     current_user: UserOut = Depends(get_current_user)
 ):
-    """Menghapus produk. Hanya user yang terkait (product_user) yang bisa melakukannya."""
+    """
+    FIX: Melakukan Soft Delete (menyetel is_active=False) untuk menjaga integritas data.
+    """
     if not is_product_owner(current_user.id, product_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Anda tidak memiliki hak untuk menghapus produk ini."
         )
-    # Hapus dulu dari tabel pivot 'product_users'
-    from ..config import supabase
-    try:
-        supabase.table("product_users").delete().eq('product_id', product_id).execute()
-    except Exception as e:
-        # Log error, tapi lanjutkan proses
-        print(f"Error deleting from product_users: {e}")
-    # Baru hapus dari tabel utama
-    res = delete('products', product_id)
+
+    # Kita TIDAK menghapus dari tabel product_users atau product_items di sini.
+    # Kita hanya menonaktifkan produk.
+    
+    # Asumsi: crud.update dapat memperbarui field is_active
+    update_data = {"is_active": False}
+    
+    res = update('products', product_id, update_data)
+    
     if not res:
         raise HTTPException(status_code=404, detail='Produk tidak ditemukan.')
-    return {"message": f"Produk dengan ID {product_id} berhasil dihapus."}
+        
+    return {"message": f"Produk dengan ID {product_id} berhasil dinonaktifkan."}
