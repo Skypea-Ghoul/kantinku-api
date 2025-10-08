@@ -20,16 +20,21 @@ def create_access_token(data: dict, expires_delta: timedelta = timedelta(hours=2
 
 @router.post("/register", response_model=UserOut)
 def register(user: UserCreate):
-    # Cek apakah username sudah ada
-    existing = supabase.table("users").select("*").eq("nama_pengguna", user.nama_pengguna).execute().data
-    if existing:
+    # Cek apakah username sudah ada (tidak case-sensitive)
+    # PERBAIKAN: Ganti .eq() dengan .ilike()
+    existing_query = supabase.table("users").select("id", count='exact').ilike("nama_pengguna", user.nama_pengguna).execute()
+    
+    # Cek count untuk performa yang lebih baik
+    if existing_query.count > 0:
         raise HTTPException(status_code=400, detail="Username sudah terdaftar")
+        
     hashed_password = pwd_context.hash(user.password)
     user_data = user.dict()
     user_data["password"] = hashed_password
     result = supabase.table("users").insert(user_data).execute().data
-    if not result or not isinstance(result, list) or not result[0]:
-        raise HTTPException(status_code=500, detail="Gagal register user")
+    if not result:
+        raise HTTPException(status_code=500, detail="Gagal mendaftarkan pengguna")
+        
     return UserOut(**result[0])
 
 @router.post("/login")

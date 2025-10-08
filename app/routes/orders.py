@@ -1,10 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from typing import List
+from typing import List, Dict, Any
 from ..models import Order, OrderItem, Order as OrderModel, UserOut
 from ..crud import fetch_orders
 from .dependencies import get_current_user
 from ..config import supabase
 from datetime import datetime
+from pydantic import BaseModel
+
+class SalesSummary(BaseModel):
+    tanggal: str
+    total_penjualan: float
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 
@@ -80,6 +85,26 @@ def update_order_status(order_id: int, status_update: dict, current_user: UserOu
         raise HTTPException(status_code=404, detail="Order tidak ditemukan atau gagal diupdate.")
 
     return updated_order.data[0]
+
+@router.get("/staff/sales-summary", response_model=List[SalesSummary])
+def get_staff_sales_summary(current_user: UserOut = Depends(get_current_user)):
+    """
+    Mengambil rekap penjualan harian untuk staff yang login.
+    Hanya menghitung dari pesanan yang berstatus 'completed'.
+    """
+    if current_user.role != "staff":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak. Hanya untuk staff."
+        )
+    
+    # Panggil fungsi RPC di Supabase untuk kalkulasi
+    sales_data = supabase.rpc(
+        "get_staff_daily_sales", {"p_staff_id": current_user.id}
+    ).execute()
+
+    # Kembalikan data atau list kosong jika tidak ada penjualan
+    return sales_data.data or []
 
 @router.get("/{order_id}", response_model=Order)
 def get_order_by_id(order_id: int, current_user=Depends(get_current_user)):
@@ -192,11 +217,12 @@ def get_order_items(order_id: int, current_user=Depends(get_current_user)):
     - Staff bisa melihat item dari order jika order tersebut mengandung produk miliknya.
     """
     # 1. Ambil data order terlebih dahulu
-    order_query = supabase.table("orders").select("*").eq("id", order_id).single().execute()
+    # FIX: Hapus .single() untuk menangani kasus 'tidak ditemukan' secara manual
+    order_query = supabase.table("orders").select("*").eq("id", order_id).execute()
     if not order_query.data:
         raise HTTPException(status_code=404, detail="Order tidak ditemukan")
 
-    order = order_query.data
+    order = order_query.data[0]
 
     # 2. Lakukan validasi hak akses berdasarkan role
     if current_user.role == "customer":
