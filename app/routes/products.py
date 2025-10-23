@@ -1,15 +1,40 @@
-from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request, Response
 from typing import List, Optional
 import base64
 from .dependencies import get_current_user
 from ..models import ProductCreate, ProductOut, UserOut
 from ..crud import fetch, insert_product, update, delete, is_product_owner, fetch_products
+from ..config import supabase
 
 router = APIRouter(prefix="/products", tags=["Products"])
 
+IMAGE_STORAGE_PATH = "static/images/products"
+import os
+os.makedirs(IMAGE_STORAGE_PATH, exist_ok=True)
+
+# Helper untuk membuat URL penuh (dari pembahasan sebelumnya)
+def _create_full_image_url(request: Request, filename: Optional[str]) -> Optional[str]:
+    if not filename:
+        return None
+    # URL gambar akan menjadi http://.../static/images/products/namafile.jpg
+    return str(request.base_url) + f"static/images/products/{filename}"
+
 @router.get("/", response_model=List[ProductOut])
-def get_products():
-    products_data = fetch_products(filters={"is_active": True}) 
+def get_products(include_inactive: bool = False):
+    """
+    Mengambil semua produk. Secara default hanya mengambil produk yang aktif.
+    Gunakan query parameter `?include_inactive=true` untuk mengambil semua produk
+    termasuk yang tidak aktif.
+    """
+    filters = None
+    if not include_inactive:
+        # Jika tidak ada permintaan untuk menyertakan yang tidak aktif,
+        # maka filter hanya yang aktif.
+        filters = {"is_active": True}
+    
+    # Jika include_inactive=true, filters akan None, dan fetch_products akan mengambil semua.
+    products_data = fetch_products(filters=filters) 
+    
     products = []
     for p in products_data:
         products.append(ProductOut(**p))
@@ -80,12 +105,10 @@ async def get_product_by_id(
     if not res:
         raise HTTPException(status_code=404, detail="Produk tidak ditemukan.")
     return res[0]
+
 @router.post("/", response_model=ProductOut)
 async def create_product(
-    nama_produk: str = Form(...),
-    harga: int = Form(...),
-    kategori_id: int = Form(...),
-    gambar: str = Form(None),  # Gambar dikirim sebagai string base64
+    product: ProductCreate,  # Gambar dikirim sebagai string base64
     current_user: UserOut = Depends(get_current_user)
 ):
     """Membuat produk baru dengan gambar base64."""
@@ -94,14 +117,6 @@ async def create_product(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Hanya staff yang bisa membuat produk."
         )
-
-    # Tidak perlu encode, langsung simpan string base64
-    product = ProductCreate(
-        nama_produk=nama_produk,
-        harga=harga,
-        kategori_id=kategori_id,
-        gambar=gambar
-    )
     
     try:
         result = insert_product(product, current_user.id)
@@ -139,29 +154,43 @@ async def update_product(
         raise HTTPException(status_code=404, detail='Produk tidak ditemukan.')
     return res
 
-@router.delete("/{product_id}")
-async def delete_product(
+@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_product(
     product_id: int,
     current_user: UserOut = Depends(get_current_user)
 ):
     """
-    FIX: Melakukan Soft Delete (menyetel is_active=False) untuk menjaga integritas data.
+    Menghapus produk. Produk tidak dapat dihapus jika masih ada di keranjang pengguna.
+    Hanya pemilik produk yang dapat menghapusnya.
     """
+    # 1. Otorisasi: Pastikan user adalah pemilik produk
     if not is_product_owner(current_user.id, product_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Anda tidak memiliki hak untuk menghapus produk ini."
         )
 
-    # Kita TIDAK menghapus dari tabel product_users atau product_items di sini.
-    # Kita hanya menonaktifkan produk.
+    # 2. Cek apakah produk ada di dalam keranjang pengguna lain
+    cart_item_query = supabase.table("cart_items").select("id", count='exact').eq("product_id", product_id).limit(1).execute()
     
-    # Asumsi: crud.update dapat memperbarui field is_active
-    update_data = {"is_active": False}
-    
-    res = update('products', product_id, update_data)
-    
-    if not res:
-        raise HTTPException(status_code=404, detail='Produk tidak ditemukan.')
-        
-    return {"message": f"Produk dengan ID {product_id} berhasil dinonaktifkan."}
+    if cart_item_query.count > 0:
+        # Jika ada, jangan hapus, kirim error 409 Conflict
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Produk tidak dapat dihapus karena masih ada di keranjang pengguna."
+        )
+
+    supabase.table("product_users").delete().eq("product_id", product_id).execute()
+
+    # 3. Lanjutkan proses penghapusan menggunakan Supabase client
+    delete_result = supabase.table("products").delete().eq("id", product_id).execute()
+
+    # 4. Cek apakah ada data yang dihapus. Jika tidak, produk tidak ditemukan.
+    if not delete_result.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Produk dengan ID {product_id} tidak ditemukan."
+        )
+
+    # 5. Kembalikan respons 204 No Content yang menandakan sukses tanpa body
+    return {"message": f"Produk dengan ID {product_id} berhasil dihapus."}

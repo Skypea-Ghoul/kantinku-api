@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routes import users, products, categories, carts, orders, payments, product_users
+from .routes import users, products, categories, carts, orders, payments, product_users, fcm
 from .auth import auth  # import routers lain di sini
 from dotenv import load_dotenv
 
@@ -26,6 +26,7 @@ app.include_router(orders.router)
 app.include_router(auth.router)
 app.include_router(payments.router)
 app.include_router(product_users.router)
+app.include_router(fcm.router)
 # ...
 
 # health check

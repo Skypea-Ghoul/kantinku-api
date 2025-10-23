@@ -40,13 +40,29 @@ def register(user: UserCreate):
 @router.post("/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends()):
     # Cari user di Supabase
-    user = supabase.table("users").select("*").eq("nama_pengguna", form_data.username).execute().data
-    if not user or not isinstance(user, list) or not user[0]:
+    user_query = supabase.table("users").select("*").eq("nama_pengguna", form_data.username).execute()
+    if not user_query.data:
         raise HTTPException(status_code=400, detail="Username tidak ditemukan")
-    user = user[0]
+    
+    # `user_query.data` adalah list, ambil elemen pertamanya
+    user = user_query.data[0] 
+    
+    # HAPUS BARIS INI KARENA MENYEBABKAN KeyError: 0
+    # user = user[0] 
+
     if not pwd_context.verify(form_data.password, user["password"]):
         raise HTTPException(status_code=400, detail="Password salah")
-    access_token = create_access_token(data={"sub": user["nama_pengguna"]})
+
+    # Buat token dengan data yang lengkap
+    token_data = {
+        "sub": user["nama_pengguna"],
+        "id": user["id"],
+        "role": user["role"],
+        "phone": user["nomor_telepon"]
+    }
+    access_token = create_access_token(data=token_data)
+    
+    # Cukup satu return statement
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.get("/profile", response_model=UserOut)

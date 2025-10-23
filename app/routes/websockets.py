@@ -1,20 +1,32 @@
-from fastapi import APIRouter, WebSocket
+# websocket.py
 
-router = APIRouter()
-active_connections = []
+from fastapi import WebSocket, WebSocketDisconnect
+from typing import List, Dict
 
-@router.websocket("/ws/payments/{user_id}")
-async def payment_ws(websocket: WebSocket, user_id: int):
-    await websocket.accept()
-    active_connections.append((user_id, websocket))
-    try:
-        while True:
-            await websocket.receive_text()
-    except:
-        active_connections.remove((user_id, websocket))
+class ConnectionManager:
+    def __init__(self):
+        # Menyimpan koneksi aktif: {user_id: [WebSocket, ...]}
+        self.active_connections: Dict[int, List[WebSocket]] = {}
 
-# Saat Midtrans callback sukses
-async def notify_payment(user_id: int, order_id: str, status: str):
-    for uid, ws in active_connections:
-        if uid == user_id:
-            await ws.send_json({"order_id": order_id, "status": status})
+    async def connect(self, websocket: WebSocket, user_id: int):
+        await websocket.accept()
+        if user_id not in self.active_connections:
+            self.active_connections[user_id] = []
+        self.active_connections[user_id].append(websocket)
+        print(f"User {user_id} connected. Total connections for user: {len(self.active_connections[user_id])}")
+
+
+    def disconnect(self, websocket: WebSocket, user_id: int):
+        if user_id in self.active_connections:
+            self.active_connections[user_id].remove(websocket)
+            if not self.active_connections[user_id]:
+                del self.active_connections[user_id]
+        print(f"User {user_id} disconnected.")
+
+    async def broadcast_to_user(self, user_id: int, message: str):
+        if user_id in self.active_connections:
+            for connection in self.active_connections[user_id]:
+                await connection.send_text(message)
+
+manager = ConnectionManager()
+

@@ -3,6 +3,7 @@ from .models import *
 from supabase import Client
 from typing import List, Dict, Any
 import base64
+import math
 
 # Generic helper
 
@@ -19,12 +20,22 @@ def fetch(table: str, filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         print(f"Error saat fetch: {e}")
         return []
     
-def hitung_harga_jual(harga_awal, target, fee):
-    fee_decimal = fee / 100
-    harga_jual = (harga_awal + target) / (1 - fee_decimal)
-    harga_jual_bulat = int(harga_jual) + (0 if harga_jual.is_integer() else 1)
-    markup = harga_jual_bulat - harga_awal
-    return harga_jual_bulat, markup
+def hitung_harga_jual(harga_awal: int, biaya_tetap: int, fee_persen: float, ppn_persen: float) -> int:
+    """Menghitung harga jual akhir dengan memperhitungkan biaya tetap, fee transaksi, dan PPN atas fee."""
+    fee_decimal = fee_persen / 100
+    ppn_decimal = ppn_persen / 100
+    
+    # Total persentase biaya = fee + (PPN * fee)
+    total_persentase_biaya = fee_decimal + (fee_decimal * ppn_decimal)
+    
+    if total_persentase_biaya >= 1:
+        # Menghindari pembagian dengan nol atau angka negatif
+        raise ValueError("Total persentase biaya tidak valid.")
+
+    harga_jual_kotor = (harga_awal + biaya_tetap) / (1 - total_persentase_biaya)
+    
+    # Bulatkan ke atas (ceiling) untuk memastikan tidak ada kerugian
+    return math.ceil(harga_jual_kotor)
 
 def insert(user: UserCreate) -> UserOut:
     try:

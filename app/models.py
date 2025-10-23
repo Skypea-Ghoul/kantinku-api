@@ -60,6 +60,7 @@ class Product(BaseModel):
     nama_produk: str
     harga: int
     kategori_id: int
+    deskripsi: Optional[str] = None 
     gambar: Optional[str] = None
     # FIX: Tambahkan field is_active
     is_active: bool = True 
@@ -68,6 +69,7 @@ class ProductCreate(BaseModel):
     nama_produk: str
     harga: int
     kategori_id: int
+    deskripsi: Optional[str] = None 
     gambar: Optional[str] = None
     # FIX: Tambahkan field is_active
     is_active: bool = True 
@@ -104,6 +106,7 @@ class OrderItem(BaseModel):
     jumlah: int
     harga_unit: float
     subtotal: float
+    status: str = "paid" # Status default saat item dibuat
     class Config:
         orm_mode = True
 
@@ -115,8 +118,17 @@ class Order(BaseModel):
     total_harga: float
     tanggal_pesanan: Optional[str] = Field(None, description="Waktu pesanan dibuat dalam format string")
     order_items: List[OrderItem] = [] 
+    snap_redirect_url: Optional[str] = None
     class Config:
         orm_mode = True
+
+class SalesSummary(BaseModel):
+    tanggal: str
+    total_penjualan: float
+
+class ProductSalesSummary(BaseModel):
+    nama_produk: str
+    jumlah_pesanan: int
 
 # Payments
 class Payment(BaseModel):
@@ -132,4 +144,5 @@ class Payment(BaseModel):
     settlement_time: Optional[datetime] = Field(None, alias="settlement_time")
     signature_key: Optional[str]
 
-
+class FcmTokenCreate(BaseModel):
+    token: str
