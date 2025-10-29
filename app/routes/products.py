@@ -5,6 +5,7 @@ from .dependencies import get_current_user
 from ..models import ProductCreate, ProductOut, UserOut
 from ..crud import fetch, insert_product, update, delete, is_product_owner, fetch_products
 from ..config import supabase
+from .websockets import notify_all_staff_of_product_change
 
 router = APIRouter(prefix="/products", tags=["Products"])
 
@@ -120,6 +121,7 @@ async def create_product(
     
     try:
         result = insert_product(product, current_user.id)
+        await notify_all_staff_of_product_change()
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
@@ -152,10 +154,11 @@ async def update_product(
     
     if not res:
         raise HTTPException(status_code=404, detail='Produk tidak ditemukan.')
+    await notify_all_staff_of_product_change()
     return res
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_product(
+async def delete_product(
     product_id: int,
     current_user: UserOut = Depends(get_current_user)
 ):
@@ -191,6 +194,6 @@ def delete_product(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Produk dengan ID {product_id} tidak ditemukan."
         )
-
+    await notify_all_staff_of_product_change()
     # 5. Kembalikan respons 204 No Content yang menandakan sukses tanpa body
     return {"message": f"Produk dengan ID {product_id} berhasil dihapus."}

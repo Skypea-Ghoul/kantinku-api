@@ -117,10 +117,18 @@ class Order(BaseModel):
     status: str
     total_harga: float
     tanggal_pesanan: Optional[str] = Field(None, description="Waktu pesanan dibuat dalam format string")
-    order_items: List[OrderItem] = [] 
+    catatan: Optional[str] = None
+    payment_method: Optional[str] = None
     snap_redirect_url: Optional[str] = None
     class Config:
         orm_mode = True
+
+class OrderCreate(BaseModel):
+    catatan: Optional[str] = None
+    payment_method: str
+
+class OrderStatus(BaseModel):
+    status: str
 
 class SalesSummary(BaseModel):
     tanggal: str

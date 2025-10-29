@@ -165,6 +165,7 @@ async def midtrans_callback(request: Request):
             return {"message": "Callback for an already processed order was ignored."}
 
         supabase.table("orders").update({"status": "paid"}).eq("id", order_id_int).execute()
+        supabase.table("order_items").update({"status": "paid"}).eq("order_id", order_id_int).execute()
 
         # --- BLOK NOTIFIKASI (WEBSOCKET + PUSH NOTIFICATION) ---
         order_items_query = supabase.table("order_items").select("product_id").eq("order_id", order_id_int).execute()
